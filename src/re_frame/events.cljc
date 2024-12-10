@@ -1,6 +1,5 @@
 (ns re-frame.events
-  (:require [re-frame.db          :refer [app-db]]
-            [re-frame.utils       :refer [first-in-vector]]
+  (:require [re-frame.utils       :refer [first-in-vector]]
             [re-frame.interop     :refer [empty-queue debug-enabled?]]
             [re-frame.registrar   :refer [get-handler register-handler]]
             [re-frame.loggers     :refer [console]]
@@ -39,8 +38,8 @@
 
    Typically, an `event handler` will be at the end of the chain (wrapped
    in an interceptor)."
-  [id interceptors]
-  (register-handler kind id (flatten-and-remove-nils id interceptors)))
+  [registry id interceptors]
+  (register-handler registry kind id (flatten-and-remove-nils id interceptors)))
 
 ;; -- handle event --------------------------------------------------------------------------------
 
@@ -48,9 +47,9 @@
 
 (defn handle
   "Given an event vector `event-v`, look up the associated interceptor chain, and execute it."
-  [event-v]
+  [{:keys [registry app-db] :as frame} event-v]
   (let [event-id  (first-in-vector event-v)]
-    (if-let [interceptors  (get-handler kind event-id true)]
+    (if-let [interceptors  (get-handler registry kind event-id true)]
       (if *handling*
         (console :error "re-frame: while handling" *handling* ", dispatch-sync was called for" event-v ". You can't call dispatch-sync within an event handler.")
         (binding [*handling*  event-v]
@@ -58,7 +57,5 @@
                              :op-type   kind
                              :tags      {:event event-v}}
             (trace/merge-trace! {:tags {:app-db-before @app-db}})
-            (interceptor/execute event-v interceptors)
+            (interceptor/execute frame event-v interceptors)
             (trace/merge-trace! {:tags {:app-db-after @app-db}})))))))
-
-

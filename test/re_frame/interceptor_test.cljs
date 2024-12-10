@@ -1,6 +1,8 @@
 (ns re-frame.interceptor-test
   (:require [cljs.test :refer-macros [is deftest testing use-fixtures]]
+            [re-frame.frame :as frame]
             [reagent.ratom :refer [atom]]
+            [re-frame.frame]
             [re-frame.core :refer [reg-global-interceptor clear-global-interceptor]]
             [re-frame.interceptor :refer [context get-coeffect assoc-effect assoc-coeffect get-effect
                                           update-effect update-coeffect ->interceptor]]
@@ -11,6 +13,13 @@
             [re-frame.registrar :as registrar]))
 
 (enable-console-print!)
+
+(def ^:dynamic *frame*)
+
+(defn set-frame
+  [f]
+  (binding [*frame* (frame/make-frame)]
+    (f)))
 
 (defn global-interceptor-fixture
   [f]
@@ -24,15 +33,15 @@
 
 (defn error-handler-fixture
   [f]
-  (let [original-handler (registrar/get-handler :error :event-handler)]
+  (let [original-handler (registrar/get-handler (:registry *frame*) :error :event-handler)]
     (f)
-    (registrar/register-handler :error :event-handler original-handler)))
+    (registrar/register-handler (:registry *frame*) :error :event-handler original-handler)))
 
-(use-fixtures :once global-interceptor-fixture)
+(use-fixtures :once set-frame global-interceptor-fixture)
 (use-fixtures :each error-handler-fixture)
 
 (deftest test-trim-v
-  (let [ctx           (context [:event-id :b :c] [])
+  (let [ctx           (context *frame* [:event-id :b :c] [])
         ctx-trimmed   ((:before trim-v) ctx)
         ctx-untrimmed ((:after trim-v) ctx-trimmed)]
     (is (= (get-coeffect ctx-trimmed :event)
@@ -45,7 +54,7 @@
   (let [db   {:showing true :another 1}
         p1   (path [:showing])]   ;; a simple one level path
 
-    (let [b4 (-> (context [] [] db)
+    (let [b4 (-> (context *frame* [] [] db)
                  ((:before p1)))         ;; before
           a (-> b4
                 (assoc-effect :db false)
@@ -60,7 +69,7 @@
   (let [db  {:1 {:2 :target}}
         p  (path [:1 :2])]    ;; a two level path
 
-    (let [b4 (-> (context [] [] db)
+    (let [b4 (-> (context *frame* [] [] db)
                  ((:before p)))]          ;; before
 
       (is (= (get-coeffect b4 :db))      ;; test before
@@ -82,7 +91,7 @@
 
 (deftest path-with-no-db-returned
   (let [path-interceptor (path :a)]
-    (-> (context [] [path-interceptor] {:a 1})
+    (-> (context *frame* [] [path-interceptor] {:a 1})
         (interceptor/invoke-interceptors :before)
         interceptor/change-direction
         (interceptor/invoke-interceptors :after)
@@ -91,7 +100,7 @@
         (is))))
 
 (deftest test-inject-global-interceptors
-  (let [forward (-> (context [] [inject-global-interceptors] {:a 1})
+  (let [forward (-> (context *frame* [] [inject-global-interceptors] {:a 1})
                     (interceptor/invoke-interceptors :before))
         _       (is (= {:direction :before} (get-coeffect forward :global)))
         reverse (-> forward
@@ -110,7 +119,7 @@
                   :new-db-val)
 
         i1      (db-handler->interceptor handler)
-        db      (-> (context event [] :original-db-val)
+        db      (-> (context *frame* event [] :original-db-val)
                     ((:before i1))            ;; calls handler - causing :db in :effects to change
                     (get-effect :db))]
     (is (= db :new-db-val))))
@@ -129,7 +138,7 @@
                   effect)
 
         i1      (fx-handler->interceptor handler)
-        e       (-> (context event [] (:db coeffect))
+        e       (-> (context *frame* event [] (:db coeffect))
                     ((:before i1))            ;; call the handler
                     (get-effect))]
     (is (= e {:db 5 :dispatch [:a]}))))
@@ -148,18 +157,18 @@
         orig-db    {:a 0 :b 2}]
 
     (is (=  {:a 0 :b 2}
-            (-> (context [] [] orig-db)
+            (-> (context *frame* [] [] orig-db)
                 ((:before no-change-handler-i))   ;; no change to :a and :b
                 ((:after change-i))
                 (get-effect :db))))
     (is (=  {:a 10 :b 2 :c 12}
-            (-> (context [] [] orig-db)
+            (-> (context *frame* [] [] orig-db)
                 ((:before change-handler-i))       ;; cause change to :a
                 ((:after change-i))
                 (get-effect :db))))
 
     (is (=  ::not-found
-            (-> (context [] [] orig-db)
+            (-> (context *frame* [] [] orig-db)
                 ((:before no-db-handler-i))       ;; no db effect in context
                 ((:after change-i))
                 (get-effect :db ::not-found))))))
@@ -167,18 +176,18 @@
 (deftest test-after
   (testing "when no db effect is returned"
     (let [after-db-val (atom nil)]
-      (-> (context [:a :b]
-            [(after (fn [db] (reset! after-db-val db)))]
-            {:a 1})
+      (-> (context *frame* [:a :b]
+                   [(after (fn [db] (reset! after-db-val db)))]
+                   {:a 1})
           (interceptor/invoke-interceptors :before)
           interceptor/change-direction
           (interceptor/invoke-interceptors :after))
       (is (= @after-db-val {:a 1}))))
   (testing "when a false db effect is returned"
     (let [after-db-val (atom :not-reset)]
-      (-> (context [:a :b]
-            [(after (fn [db] (reset! after-db-val db)))]
-            {:a 2})
+      (-> (context *frame* [:a :b]
+                   [(after (fn [db] (reset! after-db-val db)))]
+                   {:a 2})
           (assoc-effect :db nil)
           (interceptor/invoke-interceptors :before)
           interceptor/change-direction
@@ -186,9 +195,9 @@
       (is (= @after-db-val nil))))
   (testing "when a nil db effect is returned"
     (let [after-db-val (atom :not-reset)]
-      (-> (context [:a :b]
-            [(after (fn [db] (reset! after-db-val db)))]
-            {:a 3})
+      (-> (context *frame* [:a :b]
+                   [(after (fn [db] (reset! after-db-val db)))]
+                   {:a 3})
           (assoc-effect :db false)
           (interceptor/invoke-interceptors :before)
           interceptor/change-direction
@@ -198,7 +207,7 @@
 (deftest test-enrich
   (testing "when no db effect is returned"
     (let [db {:a 1}
-          ctx (context [] [] db)
+          ctx (context *frame* [] [] db)
           enrich-interceptor (enrich (fn [db _] db))]
       (is (= ::not-found (get-effect ctx :db ::not-found)))
       (is (get-effect ((:after enrich-interceptor) ctx) :db))
@@ -206,7 +215,7 @@
   (testing "uses db returned by f"
     (let [update-fn (fn [db _] (update db :a inc))
           updater (db-handler->interceptor update-fn)
-          ctx (context [] [updater] {:a 1})
+          ctx (context *frame* [] [updater] {:a 1})
           enrich-interceptor (enrich update-fn)
           result (-> ctx
                      ((:before updater))
@@ -214,7 +223,7 @@
       (is (= {:a 3} (get-effect result :db)))))
   (testing "uses given db if f returns nil"
     (let [updater (db-handler->interceptor (fn [db _] (update db :a inc)))
-          ctx (context [] [updater] {:a 1})
+          ctx (context *frame* [] [updater] {:a 1})
           enrich-interceptor (enrich (fn [_ _] nil))
           result (-> ctx
                      ((:before updater))
@@ -274,7 +283,7 @@
 
     (testing "throws via exception->ex-info"
       ;; actual handler doesn't matter here, we just need a registered handler so invoke-exception
-      (registrar/register-handler :error :event-handler identity)
+      (registrar/register-handler (:registry *frame*) :error :event-handler identity)
       (try
         (let [exception (ex-info "Oopsie" {:foo :bar})
               interceptor {:id :throws
@@ -291,7 +300,7 @@
                       :interceptor :throws}
                      (ex-data e))))))
         (finally
-          (registrar/clear-handlers :error))))))
+          (registrar/clear-handlers (:registry *frame*) :error))))))
 
 (deftest test-exceptions
   (let [error-atom (atom nil)
@@ -303,20 +312,20 @@
         interceptors [throws-before]]
 
     (testing "an exception in an interceptor, without error handler"
-      (registrar/register-handler :error :event-handler nil)
-      (is (nil? (registrar/get-handler :error :event-handler)))
+      (registrar/register-handler (:registry *frame*) :error :event-handler nil)
+      (is (nil? (registrar/get-handler (:registry *frame*) :error :event-handler)))
       (try
-        (interceptor/execute [:_] interceptors)
+        (interceptor/execute *frame* [:_] interceptors)
         (is false "interceptor should have thrown")
         (catch :default e
           (is (= "Thrown from interceptor" (ex-message e)))))
       (is (nil? @error-atom)))
 
     (testing "an exception in an interceptor, with error handler"
-      (registrar/register-handler :error :event-handler error-handler)
+      (registrar/register-handler (:registry *frame*) :error :event-handler error-handler)
       (try
-        (is (registrar/get-handler :error))
-        (interceptor/execute [:_] interceptors)
+        (is (registrar/get-handler (:registry *frame*) :error))
+        (interceptor/execute *frame* [:_] interceptors)
         (let [[original-error re-frame-error] @error-atom
               {:keys [direction event-v interceptor]} (ex-data re-frame-error)]
           (is (= "Interceptor Exception: Thrown from interceptor"
@@ -329,4 +338,4 @@
           (is (= [:_] event-v))
           (is (= :throws-before interceptor)))
         (finally
-          (registrar/clear-handlers :error))))))
+          (registrar/clear-handlers (:registry *frame*) :error))))))

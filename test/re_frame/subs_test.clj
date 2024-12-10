@@ -1,35 +1,46 @@
 (ns re-frame.subs-test
   (:require [clojure.test  :refer :all]
-            [re-frame.subs :as subs]
-            [re-frame.db   :as db]))
+            [re-frame.frame :as frame]))
+
+(def ^:dynamic *frame*)
+
+(defn set-frame
+  [f]
+  (binding [*frame* (frame/make-frame)]
+    (f)))
+
+(use-fixtures :once set-frame)
 
 (defn fixture-re-frame
   [f]
-  (let [restore-re-frame (re-frame.core/make-restore-fn)]
+  (let [restore-re-frame (frame/make-restore-fn *frame*)]
     (f)
     (restore-re-frame)))
 
 (use-fixtures :each fixture-re-frame)
 
 (deftest test-reg-sub-clj-repl
-  (subs/reg-sub
+  (frame/reg-sub
+   *frame*
    :a-sub
    (fn [db _] (:a db)))
 
-  (subs/reg-sub
+  (frame/reg-sub
+   *frame*
    :b-sub
    (fn [db _] (:b db)))
 
-  (subs/reg-sub
+  (frame/reg-sub
+   *frame*
    :a-b-sub
    (fn [_ _]
-     [(subs/subscribe [:a-sub])
-      (subs/subscribe [:b-sub])])
+     [(frame/subscribe *frame* [:a-sub])
+      (frame/subscribe *frame* [:b-sub])])
    (fn [[a b] _]
      {:a a :b b}))
 
-  (let [test-sub (subs/subscribe [:a-b-sub])]
-    (reset! db/app-db {:a 1 :b 2})
+  (let [test-sub (frame/subscribe *frame* [:a-b-sub])]
+    (reset! (:app-db *frame*) {:a 1 :b 2})
     (is (= {:a 1 :b 2} @test-sub))
-    (swap! db/app-db assoc :b 3)
+    (swap! (:app-db *frame*) assoc :b 3)
     (is (= {:a 1 :b 3} @test-sub))))

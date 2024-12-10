@@ -73,6 +73,7 @@
   (add-post-event-callback [this id callback-fn])
   (remove-post-event-callback [this id])
   (purge [this])
+  (set-frame [this frame])
 
   ;; -- Implementation via a Finite State Machine
   (-fsm-trigger [this trigger arg])
@@ -90,6 +91,7 @@
 ;; Concrete implementation of IEventQueue
 (deftype EventQueue [#?(:cljs ^:mutable fsm-state               :clj ^:volatile-mutable fsm-state)
                      #?(:cljs ^:mutable queue                   :clj ^:volatile-mutable queue)
+                     #?(:cljs ^:mutable frame                   :clj ^:volatile-mutable frame)
                      #?(:cljs ^:mutable post-event-callback-fns :clj ^:volatile-mutable post-event-callback-fns)]
   IEventQueue
 
@@ -113,6 +115,9 @@
 
   (purge [_]
     (set! queue empty-queue))
+
+  (set-frame [_ value]
+    (set! frame value))
 
   ;; -- FSM Implementation ---------------------------------------------------
 
@@ -163,6 +168,7 @@
                                :tags      {:current-state fsm-state
                                            :new-state     new-fsm-state}})
           (set! fsm-state new-fsm-state)
+          (prn 'new-fsm-state new-fsm-state)
           (when action-fn (action-fn))))))
 
   (-add-event
@@ -173,7 +179,7 @@
     [this]
     (let [event-v (peek queue)]
       (try
-        (handle event-v)
+        (handle frame event-v)
         (set! queue (pop queue))
         (-call-post-event-callbacks this event-v)
         (catch #?(:cljs :default :clj Exception) ex
@@ -215,26 +221,19 @@
     (-run-queue this)))                 ;; do the rest of the queued events
 
 ;; ---------------------------------------------------------------------------
-;; Event Queue
-;; When "dispatch" is called, the event is added into this event queue.  Later,
-;;  the queue will "run" and the event will be "handled" by the registered function.
-;;
-(def event-queue (->EventQueue :idle empty-queue {}))
-
-;; ---------------------------------------------------------------------------
 ;; Dispatching
 ;;
 
 (defn dispatch
-  [event]
+  [frame event]
   (if (nil? event)
     (throw (ex-info "re-frame: you called \"dispatch\" without an event vector." {}))
-    (push event-queue event))
+    (push (:event-queue frame) event))
   nil)                                           ;; Ensure nil return. See https://github.com/day8/re-frame/wiki/Beware-Returning-False
 
 (defn dispatch-sync
-  [event-v]
-  (handle event-v)
-  (-call-post-event-callbacks event-queue event-v)  ;; slightly ugly hack. Run the registered post event callbacks.
+  [frame event-v]
+  (handle frame event-v)
+  (-call-post-event-callbacks (:event-queue frame) event-v)  ;; slightly ugly hack. Run the registered post event callbacks.
   (trace/with-trace {:op-type :sync})
   nil)                                              ;; Ensure nil return. See https://github.com/day8/re-frame/wiki/Beware-Returning-False

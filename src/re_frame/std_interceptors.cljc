@@ -4,7 +4,6 @@
    [re-frame.interceptor :refer [->interceptor get-effect get-coeffect assoc-coeffect assoc-effect update-coeffect]]
    [re-frame.loggers :refer [console]]
    [re-frame.settings :as settings]
-   [re-frame.db :refer [app-db]]
    [clojure.data :as data]
    [re-frame.cofx :as cofx]
    [re-frame.utils :as utils]

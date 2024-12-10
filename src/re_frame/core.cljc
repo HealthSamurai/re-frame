@@ -1,21 +1,13 @@
 (ns re-frame.core
   (:require
-   [re-frame.events           :as events]
-   [re-frame.subs             :as subs]
-   [re-frame.interop          :as interop]
-   [re-frame.db               :as db]
-   [re-frame.fx               :as fx]
-   [re-frame.cofx             :as cofx]
+   [re-frame.frame            :as frame]
+   [re-frame.db               :refer [default-frame]]
    [re-frame.router           :as router]
    [re-frame.settings         :as settings]
    [re-frame.loggers          :as loggers]
-   [re-frame.registrar        :as registrar]
    [re-frame.interceptor      :as interceptor]
-   [re-frame.std-interceptors :as std-interceptors :refer [db-handler->interceptor
-                                                           fx-handler->interceptor
-                                                           ctx-handler->interceptor]]
-   [re-frame.utils            :as utils]
-   [clojure.set               :as set]))
+   [re-frame.std-interceptors :as std-interceptors]
+   [re-frame.utils            :as utils]))
 
 ;; -- dispatch ----------------------------------------------------------------
 
@@ -37,7 +29,7 @@
   "
   {:api-docs/heading "Dispatching Events"}
   [event]
-  (router/dispatch event))
+  (frame/dispatch default-frame event))
 
 (defn dispatch-sync
   "Synchronously (immediately) process `event`. It does **not** queue
@@ -65,7 +57,7 @@
   "
   {:api-docs/heading "Dispatching Events"}
   [event]
-  (router/dispatch-sync event))
+  (frame/dispatch-sync default-frame event))
 
 ;; -- Events ------------------------------------------------------------------
 
@@ -98,9 +90,9 @@
   "
   {:api-docs/heading "Event Handlers"}
   ([id handler]
-   (reg-event-db id nil handler))
+   (frame/reg-event-db default-frame id handler))
   ([id interceptors handler]
-   (events/register id [cofx/inject-db fx/do-fx std-interceptors/inject-global-interceptors interceptors (db-handler->interceptor handler)])))
+   (frame/reg-event-db default-frame id interceptors handler)))
 
 (defn reg-event-fx
   "Register the given event `handler` (function) for the given `id`. Optionally, provide
@@ -132,9 +124,9 @@
   "
   {:api-docs/heading "Event Handlers"}
   ([id handler]
-   (reg-event-fx id nil handler))
+   (frame/reg-event-fx default-frame id handler))
   ([id interceptors handler]
-   (events/register id [cofx/inject-db fx/do-fx std-interceptors/inject-global-interceptors interceptors (fx-handler->interceptor handler)])))
+   (frame/reg-event-fx default-frame id interceptors handler)))
 
 (defn reg-event-ctx
   "Register the given event `handler` (function) for the given `id`. Optionally, provide
@@ -163,9 +155,9 @@
   "
   {:api-docs/heading "Event Handlers"}
   ([id handler]
-   (reg-event-ctx id nil handler))
+   (frame/reg-event-ctx default-frame id nil handler))
   ([id interceptors handler]
-   (events/register id [cofx/inject-db fx/do-fx std-interceptors/inject-global-interceptors interceptors (ctx-handler->interceptor handler)])))
+   (frame/reg-event-ctx default-frame id interceptors handler)))
 
 (defn clear-event
   "Unregisters event handlers (presumably registered previously via the use of `reg-event-db` or `reg-event-fx`).
@@ -177,9 +169,9 @@
   console if it finds no matching registration."
   {:api-docs/heading "Event Handlers"}
   ([]
-   (registrar/clear-handlers events/kind))
+   (frame/clear-event default-frame))
   ([id]
-   (registrar/clear-handlers events/kind id)))
+   (frame/clear-event default-frame id)))
 
 ;; -- subscriptions -----------------------------------------------------------
 
@@ -432,7 +424,7 @@
   "
   {:api-docs/heading "Subscriptions"}
   [query-id & args]
-  (apply subs/reg-sub query-id args))
+  (apply frame/reg-sub default-frame query-id args))
 
 (defn subscribe
   "Given a `query` vector, returns a Reagent `reaction` which will, over
@@ -496,9 +488,9 @@
   "
   {:api-docs/heading "Subscriptions"}
   ([query]
-   (subs/subscribe query))
+   (frame/subscribe default-frame query))
   ([query dynv]
-   (subs/subscribe query dynv)))
+   (frame/subscribe default-frame query dynv)))
 
 (defn clear-sub ;; think unreg-sub
   "Unregisters subscription handlers (presumably registered previously via the use of `reg-sub`).
@@ -512,9 +504,9 @@
   NOTE: Depending on the usecase, it may be necessary to call `clear-subscription-cache!` afterwards"
   {:api-docs/heading "Subscriptions"}
   ([]
-   (registrar/clear-handlers subs/kind))
+   (frame/clear-sub default-frame))
   ([query-id]
-   (registrar/clear-handlers subs/kind query-id)))
+   (frame/clear-sub default-frame query-id)))
 
 (defn reg-sub-raw
   "This is a low level, advanced function.  You should probably be
@@ -524,7 +516,7 @@
   <a href=\"http://day8.github.io/re-frame/flow-mechanics/\" target=\"_blank\">http://day8.github.io/re-frame/flow-mechanics/</a>"
   {:api-docs/heading "Subscriptions"}
   [query-id handler-fn]
-  (registrar/register-handler subs/kind query-id handler-fn))
+  (frame/reg-sub-raw default-frame query-id handler-fn))
 
 ;; XXX
 (defn clear-subscription-cache!
@@ -538,7 +530,7 @@
   "
   {:api-docs/heading "Subscriptions"}
   []
-  (subs/clear-subscription-cache!))
+  (frame/clear-subscriptions-cache default-frame))
 
 ;; -- effects -----------------------------------------------------------------
 
@@ -567,7 +559,7 @@
   "
   {:api-docs/heading "Effect Handlers"}
   [id handler]
-  (fx/reg-fx id handler))
+  (frame/reg-fx default-frame id handler))
 
 (defn clear-fx ;; think unreg-fx
   "Unregisters effect handlers (presumably registered previously via the use of `reg-fx`).
@@ -580,9 +572,9 @@
   "
   {:api-docs/heading "Effect Handlers"}
   ([]
-   (registrar/clear-handlers fx/kind))
+   (frame/clear-fx default-frame))
   ([id]
-   (registrar/clear-handlers fx/kind id)))
+   (frame/clear-fx default-frame id)))
 
 ;; -- coeffects ---------------------------------------------------------------
 
@@ -598,7 +590,7 @@
   "
   {:api-docs/heading "Coeffects"}
   [id handler]
-  (cofx/reg-cofx id handler))
+  (frame/reg-cofx default-frame id handler))
 
 (defn inject-cofx
   "Given an `id`, and an optional, arbitrary `value`, returns an interceptor
@@ -660,9 +652,9 @@
   "
   {:api-docs/heading "Coeffects"}
   ([id]
-   (cofx/inject-cofx id))
+   (frame/inject-cofx default-frame id))
   ([id value]
-   (cofx/inject-cofx id value)))
+   (frame/inject-cofx default-frame id value)))
 
 (defn clear-cofx ;; think unreg-cofx
   "Unregisters coeffect handlers (presumably registered previously via the use of `reg-cofx`).
@@ -674,9 +666,9 @@
   console if it finds no matching registration."
   {:api-docs/heading "Coeffects"}
   ([]
-   (registrar/clear-handlers cofx/kind))
+   (frame/clear-cofx default-frame))
   ([id]
-   (registrar/clear-handlers cofx/kind id)))
+   (frame/clear-cofx default-frame id)))
 
 ;; -- error handler ----------------------------------------------------------
 
@@ -705,7 +697,7 @@
      - `:direction`: `:before` or `:after`.
      - `:event-v`: the re-frame event which invoked this interceptor."
   [handler]
-  (registrar/register-handler :error :event-handler handler))
+  (frame/event-error-handler default-frame handler))
 
 (reg-event-error-handler interceptor/default-error-handler)
 
@@ -1132,29 +1124,13 @@
   "
   {:api-docs/heading "Miscellaneous"}
   []
-  (let [handlers @registrar/kind->id->handler
-        app-db   @db/app-db
-        subs-cache @subs/query->reaction]
-    (fn []
-      ;; call `dispose!` on all current subscriptions which
-      ;; didn't originally exist.
-      (let [original-subs (set (vals subs-cache))
-            current-subs  (set (vals @subs/query->reaction))]
-        (doseq [sub (set/difference current-subs original-subs)]
-          (interop/dispose! sub)))
-
-      ;; Reset the atoms
-      ;; We don't need to reset subs/query->reaction, as
-      ;; disposing of the subs removes them from the cache anyway
-      (reset! registrar/kind->id->handler handlers)
-      (reset! db/app-db app-db)
-      nil)))
+  (frame/make-restore-fn default-frame))
 
 (defn purge-event-queue
   "Removes all events currently queued for processing"
   {:api-docs/heading "Miscellaneous"}
   []
-  (router/purge re-frame.router/event-queue))
+  (router/purge (:event-queue default-frame)))
 
 ;; -- Event Processing Callbacks  ---------------------------------------------
 
@@ -1180,7 +1156,7 @@
   ([f]
    (add-post-event-callback f f))   ;; use f as its own identifier
   ([id f]
-   (router/add-post-event-callback re-frame.router/event-queue id f)))
+   (router/add-post-event-callback (:event-queue default-frame) id f)))
 
 (defn remove-post-event-callback
   "Unregisters a post event callback function, identified by `id`.
@@ -1188,7 +1164,7 @@
   Such a function must have been previously registered via `add-post-event-callback`"
   {:api-docs/heading "Miscellaneous"}
   [id]
-  (router/remove-post-event-callback re-frame.router/event-queue id))
+  (router/remove-post-event-callback (:event-queue default-frame) id))
 
 ;; --  Deprecation ------------------------------------------------------------
 ;; Assisting the v0.7.x ->  v0.8.x transition.

@@ -1,11 +1,10 @@
 (ns re-frame.fx
   (:require
    [re-frame.router      :as router]
-   [re-frame.db          :refer [app-db]]
    [re-frame.interceptor :refer [->interceptor]]
    [re-frame.interop     :refer [set-timeout!]]
    [re-frame.events      :as events]
-   [re-frame.registrar   :refer [get-handler clear-handlers register-handler]]
+   [re-frame.registrar   :refer [get-handler clear-handlers register-handler *current-frame*]]
    [re-frame.loggers     :refer [console]]
    [re-frame.trace :as trace :include-macros true]))
 
@@ -14,13 +13,9 @@
 (def kind :fx)
 (assert (re-frame.registrar/kinds kind))
 
-(defn reg-fx
-  [id handler]
-  (register-handler kind id handler))
-
 ;; -- Interceptor -------------------------------------------------------------
 
-(def do-fx
+(defn do-fx
   "An interceptor whose `:after` actions the contents of `:effects`. As a result,
   this interceptor is Domino 3.
 
@@ -42,20 +37,24 @@
 
   You cannot rely on the ordering in which effects are executed, other than that
   `:db` is guaranteed to be executed first."
+  [registry]
   (->interceptor
    :id :do-fx
    :after (fn do-fx-after
             [context]
+            {:pre [(:frame context)]}
             (trace/with-trace
               {:op-type :event/do-fx}
               (let [effects            (:effects context)
                     effects-without-db (dissoc effects :db)]
                  ;; :db effect is guaranteed to be handled before all other effects.
                 (when-let [new-db (:db effects)]
-                  ((get-handler kind :db false) new-db))
+                  (binding [*current-frame* (:frame context)]
+                    ((get-handler registry kind :db false) new-db)))
                 (doseq [[effect-key effect-value] effects-without-db]
-                  (if-let [effect-fn (get-handler kind effect-key false)]
-                    (effect-fn effect-value)
+                  (if-let [effect-fn (get-handler registry kind effect-key false)]
+                    (binding [*current-frame* (:frame context)]
+                      (effect-fn effect-value))
                     (console :warn
                              "re-frame: no handler registered for effect:"
                              effect-key
@@ -64,126 +63,130 @@
                                (str "You may be trying to return a coeffect map from an event-fx handler. "
                                     "See https://day8.github.io/re-frame/use-cofx-as-fx/"))))))))))
 
-;; -- Builtin Effect Handlers  ------------------------------------------------
+(defn register-built-in!
+  [{:keys [registry]}]
+  (let [reg-fx (partial register-handler registry kind)]
 
-;; :dispatch-later
-;;
-;; `dispatch` one or more events after given delays. Expects a collection
-;; of maps with two keys:  :`ms` and `:dispatch`
-;;
-;; usage:
-;;
-;;    {:dispatch-later [{:ms 200 :dispatch [:event-id "param"]}    ;;  in 200ms do this: (dispatch [:event-id "param"])
-;;                      {:ms 100 :dispatch [:also :this :in :100ms]}]}
-;;
-;; Note: nil entries in the collection are ignored which means events can be added
-;; conditionally:
-;;    {:dispatch-later [ (when (> 3 5) {:ms 200 :dispatch [:conditioned-out]})
-;;                       {:ms 100 :dispatch [:another-one]}]}
-;;
-(defn dispatch-later
-  [{:keys [ms dispatch] :as effect}]
-  (if (or (empty? dispatch) (not (number? ms)))
-    (console :error "re-frame: ignoring bad :dispatch-later value:" effect)
-    (set-timeout! #(router/dispatch dispatch) ms)))
+    ;; -- Builtin Effect Handlers  ------------------------------------------------
 
-(reg-fx
- :dispatch-later
- (fn [value]
-   (if (map? value)
-     (dispatch-later value)
-     (doseq [effect (remove nil? value)]
-       (dispatch-later effect)))))
+    ;; :dispatch-later
+    ;;
+    ;; `dispatch` one or more events after given delays. Expects a collection
+    ;; of maps with two keys:  :`ms` and `:dispatch`
+    ;;
+    ;; usage:
+    ;;
+    ;;    {:dispatch-later [{:ms 200 :dispatch [:event-id "param"]}    ;;  in 200ms do this: (dispatch [:event-id "param"])
+    ;;                      {:ms 100 :dispatch [:also :this :in :100ms]}]}
+    ;;
+    ;; Note: nil entries in the collection are ignored which means events can be added
+    ;; conditionally:
+    ;;    {:dispatch-later [ (when (> 3 5) {:ms 200 :dispatch [:conditioned-out]})
+    ;;                       {:ms 100 :dispatch [:another-one]}]}
+    ;;
+    (letfn [(dispatch-later
+              [{:keys [ms dispatch] :as effect} frame]
+              (if (or (empty? dispatch) (not (number? ms)))
+                (console :error "re-frame: ignoring bad :dispatch-later value:" effect)
+                (set-timeout! #(router/dispatch frame dispatch) ms)))]
 
-;; :fx
-;;
-;; Handle one or more effects. Expects a collection of vectors (tuples) of the
-;; form [effect-key effect-value]. `nil` entries in the collection are ignored
-;; so effects can be added conditionally.
-;;
-;; usage:
-;;
-;; {:fx [[:dispatch [:event-id "param"]]
-;;       nil
-;;       [:http-xhrio {:method :post
-;;                     ...}]]}
-;;
+      (reg-fx
+        :dispatch-later
+        (fn [value]
+          (if (map? value)
+            (dispatch-later value *current-frame*)
+            (doseq [effect (remove nil? value)]
+              (dispatch-later effect *current-frame*))))))
 
-(reg-fx
- :fx
- (fn [seq-of-effects]
-   (if-not (sequential? seq-of-effects)
-     (console :warn "re-frame: \":fx\" effect expects a seq, but was given " (type seq-of-effects))
-     (doseq [[effect-key effect-value] (remove nil? seq-of-effects)]
-       (when (= :db effect-key)
-         (console :warn "re-frame: \":fx\" effect should not contain a :db effect"))
-       (if-let [effect-fn (get-handler kind effect-key false)]
-         (effect-fn effect-value)
-         (console :warn "re-frame: in \":fx\" effect found " effect-key " which has no associated handler. Ignoring."))))))
+    ;; :fx
+    ;;
+    ;; Handle one or more effects. Expects a collection of vectors (tuples) of the
+    ;; form [effect-key effect-value]. `nil` entries in the collection are ignored
+    ;; so effects can be added conditionally.
+    ;;
+    ;; usage:
+    ;;
+    ;; {:fx [[:dispatch [:event-id "param"]]
+    ;;       nil
+    ;;       [:http-xhrio {:method :post
+    ;;                     ...}]]}
+    ;;
 
-;; :dispatch
-;;
-;; `dispatch` one event. Expects a single vector.
-;;
-;; usage:
-;;   {:dispatch [:event-id "param"] }
+    (reg-fx
+      :fx
+      (fn [seq-of-effects]
+        (if-not (sequential? seq-of-effects)
+          (console :warn "re-frame: \":fx\" effect expects a seq, but was given " (type seq-of-effects))
+          (doseq [[effect-key effect-value] (remove nil? seq-of-effects)]
+            (when (= :db effect-key)
+              (console :warn "re-frame: \":fx\" effect should not contain a :db effect"))
+            (if-let [effect-fn (get-handler (:registry *current-frame*) kind effect-key false)]
+              (effect-fn effect-value)
+              (console :warn "re-frame: in \":fx\" effect found " effect-key " which has no associated handler. Ignoring."))))))
 
-(reg-fx
- :dispatch
- (fn [value]
-   (if-not (vector? value)
-     (console :error "re-frame: ignoring bad :dispatch value. Expected a vector, but got:" value)
-     (router/dispatch value))))
+    ;; :dispatch
+    ;;
+    ;; `dispatch` one event. Expects a single vector.
+    ;;
+    ;; usage:
+    ;;   {:dispatch [:event-id "param"] }
 
-;; :dispatch-n
-;;
-;; `dispatch` more than one event. Expects a list or vector of events. Something for which
-;; sequential? returns true.
-;;
-;; usage:
-;;   {:dispatch-n (list [:do :all] [:three :of] [:these])}
-;;
-;; Note: nil events are ignored which means events can be added
-;; conditionally:
-;;    {:dispatch-n (list (when (> 3 5) [:conditioned-out])
-;;                       [:another-one])}
-;;
-(reg-fx
- :dispatch-n
- (fn [value]
-   (if-not (sequential? value)
-     (console :error "re-frame: ignoring bad :dispatch-n value. Expected a collection, but got:" value)
-     (doseq [event (remove nil? value)] (router/dispatch event)))))
+    (reg-fx
+      :dispatch
+      (fn [value]
+        (if-not (vector? value)
+          (console :error "re-frame: ignoring bad :dispatch value. Expected a vector, but got:" value)
+          (router/dispatch *current-frame* value))))
 
-;; :deregister-event-handler
-;;
-;; removes a previously registered event handler. Expects either a single id (
-;; typically a namespaced keyword), or a seq of ids.
-;;
-;; usage:
-;;   {:deregister-event-handler :my-id)}
-;; or:
-;;   {:deregister-event-handler [:one-id :another-id]}
-;;
-(reg-fx
- :deregister-event-handler
- (fn [value]
-   (let [clear-event (partial clear-handlers events/kind)]
-     (if (sequential? value)
-       (doseq [event value] (clear-event event))
-       (clear-event value)))))
+    ;; :dispatch-n
+    ;;
+    ;; `dispatch` more than one event. Expects a list or vector of events. Something for which
+    ;; sequential? returns true.
+    ;;
+    ;; usage:
+    ;;   {:dispatch-n (list [:do :all] [:three :of] [:these])}
+    ;;
+    ;; Note: nil events are ignored which means events can be added
+    ;; conditionally:
+    ;;    {:dispatch-n (list (when (> 3 5) [:conditioned-out])
+    ;;                       [:another-one])}
+    ;;
+    (reg-fx
+      :dispatch-n
+      (fn [value]
+        (if-not (sequential? value)
+          (console :error "re-frame: ignoring bad :dispatch-n value. Expected a collection, but got:" value)
+          (doseq [event (remove nil? value)] (router/dispatch *current-frame* event)))))
 
-;; :db
-;;
-;; reset! app-db with a new value. `value` is expected to be a map.
-;;
-;; usage:
-;;   {:db  {:key1 value1 key2 value2}}
-;;
-(reg-fx
- :db
- (fn [value]
-   (if-not (identical? @app-db value)
-     (reset! app-db value)
-     (trace/with-trace {:op-type :reagent/quiescent}))))
+    ;; :deregister-event-handler
+    ;;
+    ;; removes a previously registered event handler. Expects either a single id (
+    ;; typically a namespaced keyword), or a seq of ids.
+    ;;
+    ;; usage:
+    ;;   {:deregister-event-handler :my-id)}
+    ;; or:
+    ;;   {:deregister-event-handler [:one-id :another-id]}
+    ;;
+    (reg-fx
+      :deregister-event-handler
+      (fn [value]
+        (let [clear-event (partial clear-handlers (:registry *current-frame*) events/kind)]
+          (if (sequential? value)
+            (doseq [event value] (clear-event event))
+            (clear-event value)))))
 
+    ;; :db
+    ;;
+    ;; reset! app-db with a new value. `value` is expected to be a map.
+    ;;
+    ;; usage:
+    ;;   {:db  {:key1 value1 key2 value2}}
+    ;;
+    (reg-fx
+      :db
+      (fn [value]
+        (let [{:keys [app-db]} *current-frame*]
+          (if-not (identical? @app-db value)
+            (reset! app-db value)
+            (trace/with-trace {:op-type :reagent/quiescent})))))))

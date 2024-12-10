@@ -130,15 +130,15 @@
 
 (defn- context
   "Create a fresh context"
-  ([event interceptors]
-   (-> {}
+  ([frame event interceptors]
+   (-> {:frame frame}
        (assoc-coeffect :event event)
       ;; Some interceptors, like `trim-v` and `unwrap`, alter event so capture
       ;; the original for use cases such as tracing.
        (assoc-coeffect :original-event event)
        (enqueue interceptors)))
-  ([event interceptors db]      ;; only used in tests, probably a hack, remove ?  XXX
-   (-> (context event interceptors)
+  ([frame event interceptors db]      ;; only used in tests, probably a hack, remove ?  XXX
+   (-> (context frame event interceptors)
        (assoc-coeffect :db db))))
 
 (defn- change-direction
@@ -228,9 +228,9 @@
    of interceptors yet to be processed, and a `:stack` of interceptors
    already done.  In advanced cases, these values can be modified by the
    functions through which the context is threaded."
-  [event-v interceptors]
-  (let [ctx (context event-v interceptors)
-        error-handler (registrar/get-handler :error :event-handler)]
+  [frame event-v interceptors]
+  (let [ctx (context frame event-v interceptors)
+        error-handler (registrar/get-handler (:registry frame) :error :event-handler)]
     (trace/merge-trace!
      {:tags {:interceptors interceptors}})
     (if-not error-handler
